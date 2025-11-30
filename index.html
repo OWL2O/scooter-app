@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micromobility Locator MVP</title>
+    
+    <link rel="manifest" href="./manifest.json">
+    <meta name="theme-color" content="#0891b2">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        
+        /* General Layout */
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        
+        /* Map Container */
+        #map-container { position: relative; width: 100%; height: 600px; min-height: 50vh; border-radius: 12px; overflow: hidden; z-index: 1; }
+        #map { width: 100%; height: 100%; z-index: 1; }
+        
+        /* Loader Overlay */
+        #map-loader { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #f3f4f6; display: flex; align-items: center; justify-content: center; z-index: 10; transition: opacity 0.5s ease; }
+        
+        /* Custom Marker Styles */
+        .custom-pin { 
+            display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 2px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.3); font-weight: bold; 
+            color: white; font-size: 14px; transition: transform 0.2s; 
+        }
+        .custom-pin:hover { transform: scale(1.1); z-index: 1000 !important; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div id="login-modal" class="fixed inset-0 bg-gray-800 bg-opacity-75 z-[100] flex items-center justify-center transition-opacity duration-300">
+        <div class="bg-white p-8 rounded-lg shadow-2xl w-full max-w-sm space-y-4">
+            <h2 class="text-2xl font-bold text-gray-800 text-center">Login Required</h2>
+            <p class="text-sm text-gray-500 text-center">Use username: **user** and password: **pass**</p>
+            <form id="login-form" class="space-y-4">
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700">Username</label>
+                    <input type="text" id="username" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                    <input type="password" id="password" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <button type="submit" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Log In
+                </button>
+                <p id="login-error" class="text-red-500 text-sm text-center hidden">Invalid username or password.</p>
+            </form>
+        </div>
+    </div>
+
+    <div class="max-w-4xl w-full space-y-6 bg-white p-6 rounded-2xl shadow-xl">
+        
+        <header class="text-center">
+            <h1 class="text-3xl font-extrabold text-gray-800">Mobility Finder</h1>
+            <p class="text-gray-500">Find scooters & bikes near you</p>
+            <div class="mt-2 inline-block bg-green-100 text-green-800 text-xs px-3 py-1 rounded-full font-semibold">
+                PWA Ready
+            </div>
+            <button id="logout-button" class="mt-2 text-sm text-red-500 hover:text-red-700 font-semibold underline hidden">
+                Log Out
+            </button>
+        </header>
+
+        <div id="map-container" class="shadow-inner border border-gray-200">
+            <div id="map-loader">
+                <div class="text-center">
+                    <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-2"></div>
+                    <span id="loader-message" class="text-gray-600 font-medium">Loading Map...</span>
+                </div>
+            </div>
+            <div id="map"></div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4 text-center text-sm">
+            <div class="p-3 bg-cyan-50 rounded-lg border border-cyan-100">
+                <div class="w-4 h-4 bg-cyan-600 rounded-full mx-auto mb-1"></div>
+                <span class="font-semibold text-cyan-800">Bolt</span>
+            </div>
+            <div class="p-3 bg-yellow-50 rounded-lg border border-yellow-100">
+                <div class="w-4 h-4 bg-yellow-600 rounded-full mx-auto mb-1"></div>
+                <span class="font-semibold text-yellow-800">Jet (Yandex)</span>
+            </div>
+            <div class="p-3 bg-purple-50 rounded-lg border border-purple-100">
+                <div class="w-4 h-4 bg-purple-600 rounded-full mx-auto mb-1"></div>
+                <span class="font-semibold text-purple-800">Lime</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 0. Authentication Logic and Constants ---
+        const LOGIN_CREDENTIALS = {
+            username: 'user',
+            password: 'pass'
+        };
+        const LOGIN_KEY = 'mobility_app_logged_in';
+        const PROVIDER_COLORS = { 'Bolt': '#0891b2', 'Jet': '#ca8a04', 'Lime': '#9333ea' };
+        let map = null;
+        let mapInitialized = false; 
+        const CORS_PROXY = "https://cors-anywhere.herokuapp.com/"; 
+        const LIVE_PROVIDERS = [
+            { name: 'Lime', url: 'https://data.lime.bike/api/partner/v1/gbfs/tbilisi/free_bike_status.json', vehicleType: 'Scooter' }
+        ];
+
+        // --- Helper Functions ---
+        function updateLoader(message, isError = false) {
+            const el = document.getElementById('loader-message');
+            el.textContent = message;
+            el.className = isError ? 'text-red-500 font-bold' : 'text-gray-600 font-medium';
+        }
+
+        function createMarkerIcon(color, label) {
+            return L.divIcon({
+                className: '',
+                html: `<div class="custom-pin" style="background-color: ${color}; width: 30px; height: 30px;">${label}</div>`,
+                iconSize: [30, 30],
+                iconAnchor: [15, 15],
+                popupAnchor: [0, -15]
+            });
+        }
+
+        function renderMarkers(vehicles) {
+            if (map) map.eachLayer(layer => {
+                if (layer instanceof L.Marker) map.removeLayer(layer);
+            });
+
+            vehicles.forEach(v => {
+                const label = v.provider.charAt(0); 
+                const color = PROVIDER_COLORS[v.provider] || '#333';
+                const marker = L.marker([v.lat, v.lon], { icon: createMarkerIcon(color, label) }).addTo(map);
+                
+                marker.bindPopup(`
+                    <div style="font-family: sans-serif; min-width: 150px;">
+                        <h3 style="margin:0; font-weight: bold;">${v.provider} ${v.type}</h3>
+                        <p style="margin: 5px 0;">Battery: <b>${v.battery}%</b></p>
+                        <button style="width: 100%; padding: 6px; background: ${color}; color: white; border:none; border-radius: 4px;">Unlock in App</button>
+                    </div>
+                `);
+            });
+        }
+
+        async function fetchVehicleData() {
+            updateLoader("Connecting to live feeds...");
+            
+            const simulatedData = [
+                { id: 'sim-1', lat: 41.7151, lon: 44.7958, provider: 'Bolt', type: 'Scooter', battery: 88 },
+                { id: 'sim-2', lat: 41.7180, lon: 44.8020, provider: 'Jet', type: 'Scooter', battery: 42 },
+                { id: 'sim-3', lat: 41.7110, lon: 44.7890, provider: 'Bolt', type: 'Scooter', battery: 95 },
+                { id: 'sim-4', lat: 41.7085, lon: 44.8105, provider: 'Lime', type: 'Scooter', battery: 60 },
+                { id: 'sim-5', lat: 41.7195, lon: 44.7900, provider: 'Jet', type: 'Scooter', battery: 15 },
+            ];
+            
+            let liveVehicles = [];
+
+            try {
+                const promises = LIVE_PROVIDERS.map(async (p) => {
+                    try {
+                        const res = await fetch(CORS_PROXY + p.url);
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        const data = await res.json();
+                        return data.data.bikes.map(b => ({
+                            lat: b.lat, lon: b.lon, provider: p.name, type: p.vehicleType, battery: 100
+                        }));
+                    } catch (e) { 
+                        console.warn(`Live Fetch failed for ${p.name}:`, e.message); 
+                        return []; 
+                    }
+                });
+
+                const results = await Promise.all(promises);
+                liveVehicles = results.flat();
+
+                if (liveVehicles.length > 0) {
+                    updateLoader("Live data loaded, mixing with simulation.");
+                    const simulatedOthers = simulatedData.filter(s => liveVehicles.every(l => l.provider !== s.provider));
+                    return [...liveVehicles, ...simulatedOthers];
+                }
+                
+                throw new Error("Live feed unavailable or empty.");
+
+            } catch (e) {
+                updateLoader("Live feed unavailable. Using simulation...", true);
+                await new Promise(r => setTimeout(r, 1500)); 
+                return simulatedData;
+            }
+        }
+
+        // --- Core Authentication Handlers ---
+        function checkAuthentication() {
+            const loginModal = document.getElementById('login-modal');
+            const isLoggedIn = localStorage.getItem(LOGIN_KEY) === 'true';
+
+            if (isLoggedIn) {
+                // If already logged in, hide the modal immediately
+                loginModal.style.display = 'none';
+            }
+            return isLoggedIn;
+        }
+
+        function handleLogin(e) {
+            e.preventDefault();
+            const usernameInput = document.getElementById('username').value;
+            const passwordInput = document.getElementById('password').value;
+            const errorMsg = document.getElementById('login-error');
+
+            if (usernameInput === LOGIN_CREDENTIALS.username && passwordInput === LOGIN_CREDENTIALS.password) {
+                localStorage.setItem(LOGIN_KEY, 'true');
+                document.getElementById('login-modal').style.display = 'none';
+                document.getElementById('logout-button').classList.remove('hidden');
+                initializeMapAndData();
+            } else {
+                errorMsg.classList.remove('hidden');
+            }
+        }
+
+        function handleLogout() {
+            localStorage.removeItem(LOGIN_KEY);
+            window.location.reload(); 
+        }
+
+        // --- Main App Initialization ---
+        async function initializeMapAndData() {
+            if (typeof L === 'undefined') return updateLoader('Map library missing', true);
+            
+            if (!mapInitialized) {
+                map = L.map('map').setView([41.7169, 44.7997], 15);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+                mapInitialized = true;
+            }
+
+            const vehicles = await fetchVehicleData();
+            renderMarkers(vehicles);
+
+            setTimeout(() => {
+                map.invalidateSize();
+                const loader = document.getElementById('map-loader');
+                loader.style.opacity = '0';
+                setTimeout(() => loader.style.display = 'none', 500);
+            }, 500);
+        }
+
+        // --- Initial Load Setup (Guaranteed to run after HTML is ready) ---
+        window.addEventListener('load', () => {
+            // 1. PWA Registration
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('./service-worker.js') 
+                    .catch(err => console.error('Service Worker registration failed:', err));
+            }
+
+            // 2. Attach Login/Logout handlers
+            const loginForm = document.getElementById('login-form');
+            const logoutButton = document.getElementById('logout-button');
+            
+            if (loginForm) loginForm.addEventListener('submit', handleLogin);
+            if (logoutButton) logoutButton.addEventListener('click', handleLogout);
+
+            // 3. Check Auth and start app or show modal
+            if (checkAuthentication()) {
+                initializeMapAndData();
+                if (logoutButton) logoutButton.classList.remove('hidden');
+            }
+        });
+    </script>
+</body>
+</html>
